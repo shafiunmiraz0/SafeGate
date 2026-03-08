@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/joho/godotenv"
 
@@ -18,6 +19,13 @@ func main() {
 	_ = godotenv.Load()
 
 	cfg := config.Load()
+
+	// Validate API key strength
+	if cfg.APIKey == "" {
+		log.Println("WARNING: No API key configured — authentication is DISABLED. Set SAFEGATE_API_KEY for production.")
+	} else if len(cfg.APIKey) < 32 {
+		log.Println("WARNING: API key is shorter than 32 characters. Use a strong, random key for production.")
+	}
 
 	// Build scanner pipeline
 	scanners := []scanner.Scanner{
@@ -43,16 +51,44 @@ func main() {
 	mux.HandleFunc("/health", handler.HandleHealth)
 	mux.HandleFunc("/api/v1/scan", scanHandler.HandleScan)
 
-	// Middleware stack
+	// Middleware stack (applied in reverse order)
 	var h http.Handler = mux
-	h = middleware.APIKeyAuth(cfg.APIKey, h)
-	h = middleware.CORS(h)
+
+	// Per-request timeout
+	h = middleware.RequestTimeout(cfg.RequestTimeout, h)
+
+	// Authentication (health endpoint is public)
+	h = middleware.APIKeyAuth(cfg.APIKey, []string{"/health"}, h)
+
+	// Rate limiting
+	if cfg.RateLimitRPM > 0 {
+		limiter := middleware.NewRateLimiter(cfg.RateLimitRPM, cfg.TrustedProxies)
+		h = limiter.Middleware(h)
+		log.Printf("Rate limiting enabled: %d requests/minute per IP", cfg.RateLimitRPM)
+	}
+
+	// CORS
+	h = middleware.CORS(cfg.CORSAllowedOrigins, h)
+
+	// Security headers
+	h = middleware.SecurityHeaders(h)
+
+	// Request ID + logging (outermost)
+	h = middleware.RequestID(h)
 	h = middleware.RequestLogger(h)
 
 	addr := ":" + cfg.Port
 	log.Printf("SafeGate starting on %s", addr)
 
-	if err := http.ListenAndServe(addr, h); err != nil {
+	server := &http.Server{
+		Addr:         addr,
+		Handler:      h,
+		ReadTimeout:  time.Duration(cfg.ReadTimeout) * time.Second,
+		WriteTimeout: time.Duration(cfg.WriteTimeout) * time.Second,
+		IdleTimeout:  time.Duration(cfg.IdleTimeout) * time.Second,
+	}
+
+	if err := server.ListenAndServe(); err != nil {
 		log.Printf("Server error: %v", err)
 		os.Exit(1)
 	}

@@ -17,6 +17,15 @@ type Config struct {
 	TempDir         string
 	MaxArchiveDepth int
 	MaxArchiveSize  int64 // max decompressed size to prevent zip bombs
+
+	// Security settings
+	CORSAllowedOrigins []string // allowed CORS origins (empty = block all cross-origin)
+	RateLimitRPM       int      // max requests per minute per IP (0 = disabled)
+	ReadTimeout        int      // HTTP server read timeout in seconds
+	WriteTimeout       int      // HTTP server write timeout in seconds
+	IdleTimeout        int      // HTTP server idle timeout in seconds
+	RequestTimeout     int      // per-request context timeout in seconds
+	TrustedProxies     []string // trusted proxy IPs for X-Forwarded-For
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -31,6 +40,14 @@ func Load() *Config {
 		TempDir:         getEnv("SAFEGATE_TEMP_DIR", os.TempDir()),
 		MaxArchiveDepth: getEnvInt("SAFEGATE_MAX_ARCHIVE_DEPTH", 3),
 		MaxArchiveSize:  getEnvInt64("SAFEGATE_MAX_ARCHIVE_SIZE", 200*1024*1024), // 200MB
+
+		CORSAllowedOrigins: getEnvSlice("SAFEGATE_CORS_ORIGINS", nil),
+		RateLimitRPM:        getEnvInt("SAFEGATE_RATE_LIMIT_RPM", 60),
+		ReadTimeout:         getEnvInt("SAFEGATE_READ_TIMEOUT", 30),
+		WriteTimeout:        getEnvInt("SAFEGATE_WRITE_TIMEOUT", 60),
+		IdleTimeout:         getEnvInt("SAFEGATE_IDLE_TIMEOUT", 120),
+		RequestTimeout:      getEnvInt("SAFEGATE_REQUEST_TIMEOUT", 300),
+		TrustedProxies:      getEnvSlice("SAFEGATE_TRUSTED_PROXIES", nil),
 	}
 }
 
