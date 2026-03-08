@@ -1,64 +1,358 @@
-I want to make a go application 
-That can scan files like pdf xl doc jpg PNG svg and other uploadable file type for any security vulnerability and security threat.
+<p align="center">
+  <strong>SafeGate</strong><br>
+  A high-performance file security scanning microservice written in Go.
+</p>
 
-Then give response the scan results and if scan pass then give response the results and file itself for upload.
-
-I want to integrate it to my Laravel application.
-
-Great idea! Building a dedicated file scanning microservice in Go that integrates with your Laravel application is a solid architectural decision. Let me break this down:
-
----
-
-## Is It a Good Idea? **Yes, absolutely.**
-
-Here's why:
-
-| Benefit | Details |
-|---|---|
-| **Performance** | Go is excellent for CPU-bound tasks like file scanning — fast, compiled, and low memory footprint. |
-| **Separation of Concerns** | Offloading file security scanning to a dedicated service keeps your Laravel app clean and focused. |
-| **Scalability** | A Go microservice can be independently scaled if scanning becomes a bottleneck. |
-| **Security-first** | Scanning files *before* they reach your Laravel storage/database adds a strong security layer. |
-| **Reusability** | The Go service can be reused across multiple projects, not just Laravel. |
+<p align="center">
+  <a href="#features">Features</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#api-reference">API</a> •
+  <a href="#configuration">Configuration</a> •
+  <a href="#laravel-integration">Laravel Integration</a> •
+  <a href="#license">License</a>
+</p>
 
 ---
 
-## What It Should Scan For
+## Overview
 
-- **Malware/Viruses** — via ClamAV integration or similar engines
-- **Embedded scripts** — malicious macros in `.doc`, `.xls`, `.pdf`
-- **Steganography / hidden payloads** — in images (`.jpg`, `.png`, `.svg`)
-- **SVG XSS attacks** — inline JavaScript in SVG files
-- **File type spoofing** — e.g., a `.exe` renamed to `.jpg` (MIME type vs. extension mismatch)
-- **Archive bombs** (zip bombs) — if you support `.zip` uploads
-- **Oversized files / metadata anomalies**
+SafeGate is a dedicated file security scanning microservice that inspects uploaded files for malware, embedded scripts, file type spoofing, zip bombs, and other threats — **before** they reach your application's storage. It exposes a simple REST API and is designed to sit between your application (e.g. Laravel, Django, Express) and your file storage layer.
 
----
+## Features
 
-## Architecture Overview
+- **Antivirus Scanning** — ClamAV integration via TCP INSTREAM protocol
+- **MIME Type Validation** — Detects file type spoofing by comparing magic bytes against claimed MIME types
+- **Executable Detection** — Identifies PE (Windows), ELF (Linux), and Mach-O (macOS) binaries disguised as other file types
+- **SVG XSS Protection** — Scans SVG files for `<script>` tags, event handlers, `javascript:` URIs, `<foreignObject>`, external references, and embedded base64 payloads
+- **Office Macro Detection** — Detects VBA macros, auto-execute triggers, and shell commands in legacy (`.doc`, `.xls`, `.ppt`) and modern (`.docx`, `.xlsx`, `.pptx`) Office formats
+- **PDF Security Analysis** — Flags embedded JavaScript, auto-execute actions, launch actions, embedded files, and encrypted streams in PDFs
+- **Zip Bomb Protection** — Analyzes compression ratios, nesting depth, decompressed size limits, and detects path traversal in archives
+- **Metadata Validation** — Checks file size limits, empty files, null byte injection in text files, filename length, and double-extension spoofing (e.g. `report.pdf.exe`)
+- **API Key Authentication** — Optional `X-API-Key` or `Bearer` token authentication with constant-time comparison
+- **CORS Support** — Built-in Cross-Origin Resource Sharing headers
+- **Health Check Endpoint** — For load balancer and orchestrator readiness probes
+- **Zero Dependencies Runtime** — Single static binary, runs on Alpine Linux
+
+## Architecture
 
 ```
-[User Upload] → [Laravel App] → [Go Scanner API (HTTP/gRPC)]
-                                        │
-                                   ┌────┴─────┐
-                                   │  Scan     │
-                                   │  Engine   │
-                                   │ (ClamAV,  │
-                                   │  YARA,    │
-                                   │  custom)  │
-                                   └────┬──────┘
-                                        │
-                                  ✅ Pass → return file + results → Laravel stores file
-                                  ❌ Fail → return threat details → Laravel rejects upload
+┌──────────────┐       POST /api/v1/scan       ┌────────────────────────┐
+│  Your App    │  ──────────────────────────▶   │       SafeGate         │
+│  (Laravel,   │                                │                        │
+│   Django,    │       JSON response            │  ┌──────────────────┐  │
+│   Express)   │  ◀──────────────────────────   │  │ Scanner Pipeline │  │
+└──────────────┘                                │  │                  │  │
+                                                │  │ 1. Metadata      │  │
+                                                │  │ 2. MIME Type     │  │
+                                                │  │ 3. SVG XSS      │  │     ┌──────────┐
+                                                │  │ 4. Macro/Script  │  │     │  ClamAV  │
+                                                │  │ 5. Archive Bomb  │  │     │  Daemon  │
+                                                │  │ 6. ClamAV ───────│──│────▶│ (TCP)    │
+                                                │  └──────────────────┘  │     └──────────┘
+                                                └────────────────────────┘
 ```
 
----
+Files are scanned through a **pipeline of 6 scanners** in sequence. If any scanner reports a **critical**, **high**, or **medium** severity finding, the file is marked as **unsafe**.
 
+## Quick Start
 
-## Next Steps
+### Using Docker Compose (Recommended)
 
-1. **Design the API contract** — define endpoints like `POST /scan` that accept multipart file uploads and return JSON results.
-2. **Integrate a scan engine** — start with [ClamAV](https://www.clamav.net/) for antivirus and add custom rules (YARA rules, MIME validation, SVG sanitization).
-3. **Containerize** — Docker makes it easy to bundle Go + ClamAV together.
+```bash
+# Clone the repository
+git clone https://github.com/YourName/safegate.git
+cd safegate
 
+# Copy and configure environment variables
+cp .env.example .env
+# Edit .env to set your SAFEGATE_API_KEY
 
+# Start SafeGate + ClamAV
+docker compose up -d
+
+# Test the health endpoint
+curl http://localhost:8443/health
+```
+
+> **Note:** ClamAV takes ~2 minutes on first start to download virus definitions.
+
+### Using Go Directly
+
+```bash
+# Prerequisites: Go 1.22+
+
+# Clone and build
+git clone https://github.com/YourName/safegate.git
+cd safegate
+go build -o safegate ./cmd/safegate
+
+# Configure (optional)
+export SAFEGATE_PORT=8443
+export SAFEGATE_CLAMAV_ENABLED=false  # Set to true if ClamAV is available
+
+# Run
+./safegate
+```
+
+## API Reference
+
+### Health Check
+
+```
+GET /health
+```
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "service": "safegate",
+  "time": "2026-03-08T03:43:06Z"
+}
+```
+
+### Scan File
+
+```
+POST /api/v1/scan
+Content-Type: multipart/form-data
+X-API-Key: your-api-key
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `file` | `multipart` | **Required.** The file to scan. |
+
+**Success Response** (`200 OK` — file is safe):
+```json
+{
+  "success": true,
+  "message": "File scan complete — file is safe",
+  "data": {
+    "safe": true,
+    "filename": "report.pdf",
+    "file_size": 102400,
+    "mime_type": "application/pdf",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb924...",
+    "scanned_at": "2026-03-08T03:43:06Z",
+    "duration_ms": 45,
+    "findings": [],
+    "scanners_run": [
+      "metadata_scanner",
+      "mime_type_validator",
+      "svg_xss_scanner",
+      "macro_script_scanner",
+      "archive_bomb_scanner",
+      "clamav_antivirus"
+    ]
+  }
+}
+```
+
+**Threat Detected Response** (`422 Unprocessable Entity`):
+```json
+{
+  "success": false,
+  "message": "File scan complete — threats detected",
+  "data": {
+    "safe": false,
+    "filename": "malicious.svg",
+    "file_size": 2048,
+    "mime_type": "image/svg+xml",
+    "sha256": "a1b2c3d4...",
+    "scanned_at": "2026-03-08T03:43:06Z",
+    "duration_ms": 12,
+    "findings": [
+      {
+        "scanner": "svg_xss_scanner",
+        "severity": "critical",
+        "description": "SVG contains <script> tags",
+        "details": "Inline JavaScript in SVG files can execute XSS attacks when rendered in a browser"
+      }
+    ],
+    "scanners_run": ["metadata_scanner", "mime_type_validator", "svg_xss_scanner", "macro_script_scanner", "archive_bomb_scanner"]
+  }
+}
+```
+
+**Authentication Error** (`401 Unauthorized`):
+```json
+{
+  "success": false,
+  "message": "Invalid or missing API key"
+}
+```
+
+### cURL Examples
+
+```bash
+# Scan a file
+curl -X POST http://localhost:8443/api/v1/scan \
+  -H "X-API-Key: your-secret-api-key" \
+  -F "file=@document.pdf"
+
+# Using Bearer token authentication
+curl -X POST http://localhost:8443/api/v1/scan \
+  -H "Authorization: Bearer your-secret-api-key" \
+  -F "file=@photo.jpg"
+```
+
+## Configuration
+
+All configuration is done via environment variables. Copy `.env.example` to `.env` to get started.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SAFEGATE_PORT` | `8443` | HTTP server port |
+| `SAFEGATE_API_KEY` | *(empty)* | API key for authentication. Leave empty to disable auth. |
+| `SAFEGATE_MAX_FILE_SIZE` | `52428800` (50 MB) | Maximum upload file size in bytes |
+| `SAFEGATE_CLAMAV_ADDR` | `clamav:3310` | ClamAV daemon TCP address |
+| `SAFEGATE_CLAMAV_ENABLED` | `true` | Enable/disable ClamAV antivirus scanning |
+| `SAFEGATE_MAX_ARCHIVE_DEPTH` | `3` | Maximum archive nesting depth (zip bomb protection) |
+| `SAFEGATE_MAX_ARCHIVE_SIZE` | `209715200` (200 MB) | Maximum decompressed archive size in bytes |
+| `SAFEGATE_ALLOWED_TYPES` | *(see below)* | Comma-separated list of allowed MIME types |
+| `SAFEGATE_TEMP_DIR` | OS temp dir | Temporary directory for file processing |
+
+### Default Allowed MIME Types
+
+```
+application/pdf, application/msword,
+application/vnd.openxmlformats-officedocument.wordprocessingml.document,
+application/vnd.ms-excel,
+application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,
+application/vnd.ms-powerpoint,
+application/vnd.openxmlformats-officedocument.presentationml.presentation,
+image/jpeg, image/png, image/gif, image/webp, image/svg+xml,
+application/zip, application/x-rar-compressed, application/x-7z-compressed,
+text/plain, text/csv, application/json
+```
+
+## Scanner Pipeline
+
+SafeGate runs files through a pipeline of scanners in order. Each scanner implements the `Scanner` interface and returns findings with severity levels.
+
+| Scanner | What It Detects |
+|---------|----------------|
+| **Metadata Scanner** | File size violations, empty files, null byte injection, filename length, double-extension spoofing |
+| **MIME Type Validator** | Disallowed file types, MIME type spoofing (magic bytes vs. claimed type), hidden executables |
+| **SVG XSS Scanner** | `<script>` tags, event handlers (`onload`, `onclick`), `javascript:` URIs, `data:` URIs, `<foreignObject>`, external `xlink:href`, embedded base64 |
+| **Macro/Script Scanner** | PDF JavaScript/auto-actions/launch actions, Office VBA macros, auto-execute macros (`AutoOpen`, `Document_Open`), shell commands, external template references |
+| **Archive Bomb Scanner** | Zip bombs (compression ratio >100:1), excessive nesting depth, decompressed size limits, path traversal (`..`), executables inside archives, excessive file count (>10,000) |
+| **ClamAV Antivirus** | Malware, viruses, trojans, and other threats via ClamAV virus definitions |
+
+### Severity Levels
+
+| Level | Effect | Description |
+|-------|--------|-------------|
+| `critical` | File rejected | Confirmed threat (malware, XSS, executable disguise) |
+| `high` | File rejected | Likely threat (type spoofing, suspicious macros) |
+| `medium` | File rejected | Possible threat (encrypted streams, null bytes) |
+| `low` | File accepted | Informational warning (empty file, URI actions in PDF) |
+| `info` | File accepted | Informational note |
+
+## Laravel Integration
+
+### Using Guzzle HTTP Client
+
+```php
+<?php
+
+namespace App\Services;
+
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Http;
+
+class SafeGateService
+{
+    public function scan(UploadedFile $file): array
+    {
+        $response = Http::withHeaders([
+            'X-API-Key' => config('services.safegate.api_key'),
+        ])->attach(
+            'file',
+            file_get_contents($file->getRealPath()),
+            $file->getClientOriginalName()
+        )->post(config('services.safegate.url') . '/api/v1/scan');
+
+        return $response->json();
+    }
+
+    public function isSafe(UploadedFile $file): bool
+    {
+        $result = $this->scan($file);
+        return $result['success'] ?? false;
+    }
+}
+```
+
+### Laravel Config (`config/services.php`)
+
+```php
+'safegate' => [
+    'url' => env('SAFEGATE_URL', 'http://localhost:8443'),
+    'api_key' => env('SAFEGATE_API_KEY'),
+],
+```
+
+### Usage in a Controller
+
+```php
+public function upload(Request $request, SafeGateService $scanner)
+{
+    $request->validate(['file' => 'required|file|max:51200']);
+
+    $file = $request->file('file');
+    $result = $scanner->scan($file);
+
+    if (!$result['success']) {
+        return response()->json([
+            'message' => 'File rejected — security threats detected.',
+            'findings' => $result['data']['findings'] ?? [],
+        ], 422);
+    }
+
+    // File is safe — proceed with storage
+    $path = $file->store('uploads', 'public');
+
+    return response()->json([
+        'message' => 'File uploaded successfully.',
+        'path' => $path,
+        'scan' => $result['data'],
+    ]);
+}
+```
+
+## Project Structure
+
+```
+safegate/
+├── cmd/
+│   └── safegate/
+│       └── main.go              # Application entry point, wiring
+├── internal/
+│   ├── config/
+│   │   └── config.go            # Environment-based configuration
+│   ├── handler/
+│   │   └── handler.go           # HTTP handlers (scan + health)
+│   ├── middleware/
+│   │   └── middleware.go         # API key auth, CORS, request logging
+│   └── scanner/
+│       ├── scanner.go           # Scanner interface, orchestrator, types
+│       ├── metadata.go          # File metadata validation
+│       ├── mime.go              # MIME type detection and spoofing checks
+│       ├── svg.go               # SVG XSS attack detection
+│       ├── macro.go             # Office macro and PDF script detection
+│       ├── archive.go           # Zip bomb and archive analysis
+│       └── clamav.go            # ClamAV TCP integration
+├── .env.example                 # Example environment configuration
+├── Dockerfile                   # Multi-stage build (Go → Alpine)
+├── docker-compose.yml           # SafeGate + ClamAV stack
+├── go.mod
+├── go.sum
+└── LICENSE                      # Apache 2.0
+```
+
+## License
+
+SafeGate is licensed under the [Apache License 2.0](LICENSE).
