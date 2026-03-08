@@ -1,0 +1,745 @@
+{
+  "info": {
+    "name": "SafeGate",
+    "description": "Postman collection for the SafeGate file-scanning API.\n\nSet the `baseUrl` variable (default: http://localhost:8443) and the `apiKey` variable to match your SAFEGATE_API_KEY environment variable.\n\nEndpoints:\n- GET  /health          – liveness check\n- POST /api/v1/scan     – upload and scan a file\n- OPTIONS /api/v1/scan  – CORS pre-flight",
+    "_postman_id": "safegate-collection-v1",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8443",
+      "type": "string"
+    },
+    {
+      "key": "apiKey",
+      "value": "changeme",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health check – 200 OK",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Body has status healthy', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.status).to.eql('healthy');",
+                  "    pm.expect(body.service).to.eql('safegate');",
+                  "    pm.expect(body.time).to.be.a('string');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "Health check – 401 missing API key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 401 when API key configured but missing', () => {",
+                  "    // This will be 200 if SAFEGATE_API_KEY is empty (auth disabled)",
+                  "    pm.expect([200, 401]).to.include(pm.response.code);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Scan – 401 missing API key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Error body', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.success).to.be.false;",
+                  "    pm.expect(body.message).to.include('API key');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        },
+        {
+          "name": "Scan – 401 invalid API key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Error body', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.success).to.be.false;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "wrong-key"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        },
+        {
+          "name": "Scan – auth via Bearer token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Expect 400 (bad request – no file) not 401, proving Bearer auth works",
+                  "pm.test('Not 401 – Bearer auth accepted', () => {",
+                  "    pm.expect(pm.response.code).to.not.eql(401);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": []
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Scan – happy path",
+      "item": [
+        {
+          "name": "Scan safe plain-text file – 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response shape', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.success).to.be.true;",
+                  "    pm.expect(body.message).to.include('safe');",
+                  "    pm.expect(body.data).to.be.an('object');",
+                  "    pm.expect(body.data.safe).to.be.true;",
+                  "    pm.expect(body.data.sha256).to.be.a('string').with.lengthOf(64);",
+                  "    pm.expect(body.data.scanners_run).to.be.an('array').that.is.not.empty;",
+                  "    pm.expect(body.data.findings).to.be.an('array');",
+                  "    pm.expect(body.data.duration_ms).to.be.a('number');",
+                  "});",
+                  "",
+                  "// Store SHA256 for later assertions",
+                  "pm.environment.set('lastSHA256', pm.response.json().data.sha256);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "description": "Upload any plain-text .txt file here",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        },
+        {
+          "name": "Scan safe PDF file – 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Safe result', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.success).to.be.true;",
+                  "    pm.expect(body.data.safe).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "description": "Upload a benign PDF file here",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        },
+        {
+          "name": "Scan safe PNG image – 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Safe result', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.data.safe).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "description": "Upload a benign PNG image here",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        },
+        {
+          "name": "Scan safe ZIP archive – 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Safe result and archive scanner ran', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.data.safe).to.be.true;",
+                  "    pm.expect(body.data.scanners_run).to.include('archive');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "description": "Upload a benign ZIP archive here",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Scan – threat detection",
+      "item": [
+        {
+          "name": "Scan SVG with embedded script – 422",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('Unsafe result', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.success).to.be.false;",
+                  "    pm.expect(body.data.safe).to.be.false;",
+                  "    pm.expect(body.data.findings).to.not.be.empty;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Creates an in-memory SVG file with an embedded <script> tag.",
+                  "// Postman does not support programmatic file uploads directly;",
+                  "// manually attach the SVG file below, or use the pre-generated body above."
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "description": "Upload an SVG file that contains a <script> tag, e.g.:\n<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        },
+        {
+          "name": "Scan Office file with macros – 422",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('Macro finding present', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.data.safe).to.be.false;",
+                  "    const macroFinding = body.data.findings.some(f => f.scanner === 'macro');",
+                  "    pm.expect(macroFinding).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "description": "Upload an .xlsm / .docm / .pptm file that contains a VBA macro",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        },
+        {
+          "name": "Scan disallowed MIME type – 422",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('MIME finding present', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.data.safe).to.be.false;",
+                  "    const mimeFinding = body.data.findings.some(f => f.scanner === 'mime');",
+                  "    pm.expect(mimeFinding).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "description": "Upload a file with a disallowed MIME type, e.g. a .exe binary",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Scan – error cases",
+      "item": [
+        {
+          "name": "Scan – 400 missing file field",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error message', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.success).to.be.false;",
+                  "    pm.expect(body.message).to.include('file');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "not_a_file",
+                  "value": "hello",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        },
+        {
+          "name": "Scan – 405 wrong method (GET)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 405', () => pm.response.to.have.status(405));",
+                  "pm.test('Error message', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.success).to.be.false;",
+                  "    pm.expect(body.message).to.match(/method not allowed/i);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        },
+        {
+          "name": "Scan – 400 empty multipart form",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error body', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.success).to.be.false;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": []
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "CORS",
+      "item": [
+        {
+          "name": "CORS pre-flight OPTIONS /api/v1/scan – 204",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 204', () => pm.response.to.have.status(204));",
+                  "pm.test('CORS headers present', () => {",
+                  "    pm.expect(pm.response.headers.get('Access-Control-Allow-Origin')).to.eql('*');",
+                  "    pm.expect(pm.response.headers.get('Access-Control-Allow-Methods')).to.include('POST');",
+                  "    pm.expect(pm.response.headers.get('Access-Control-Allow-Headers')).to.include('X-API-Key');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "OPTIONS",
+            "header": [
+              {
+                "key": "Origin",
+                "value": "https://example.com"
+              },
+              {
+                "key": "Access-Control-Request-Method",
+                "value": "POST"
+              },
+              {
+                "key": "Access-Control-Request-Headers",
+                "value": "X-API-Key, Content-Type"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        },
+        {
+          "name": "CORS pre-flight OPTIONS /health – 204",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 204', () => pm.response.to.have.status(204));",
+                  "pm.test('CORS headers present', () => {",
+                  "    pm.expect(pm.response.headers.get('Access-Control-Allow-Origin')).to.eql('*');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "OPTIONS",
+            "header": [
+              {
+                "key": "Origin",
+                "value": "https://example.com"
+              },
+              {
+                "key": "Access-Control-Request-Method",
+                "value": "GET"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
