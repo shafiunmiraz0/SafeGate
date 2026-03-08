@@ -18,8 +18,8 @@ services:
       - safegate-net
 
   clamav:
-    image: clamav/clamav:1.3
-    container_name: safegate-clamav
+    image: clamav/clamav:stable
+    container_name: clamav
     ports:
       - "3310:3310"
     volumes:
