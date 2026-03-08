@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "SafeGate",
-    "description": "Postman collection for the SafeGate file-scanning API.\n\nSet the `baseUrl` variable (default: http://localhost:8443) and the `apiKey` variable to match your SAFEGATE_API_KEY environment variable.\n\nEndpoints:\n- GET  /health          – liveness check\n- POST /api/v1/scan     – upload and scan a file\n- OPTIONS /api/v1/scan  – CORS pre-flight",
+    "description": "Postman collection for the SafeGate file-scanning API.\n\nSet the `baseUrl` variable (default: http://localhost:8443) and the `apiKey` variable to match your SAFEGATE_API_KEY environment variable.\n\nEndpoints:\n- GET  /health          – public liveness check (no auth required)\n- POST /api/v1/scan     – upload and scan a file\n- OPTIONS /api/v1/scan  – CORS pre-flight\n\nSecurity features tested:\n- Security headers (HSTS, CSP, X-Content-Type-Options, X-Frame-Options, etc.)\n- X-Request-ID tracing on every response\n- Rate limiting (429 Too Many Requests)\n- CORS with configurable allowed origins\n- API key authentication (X-API-Key or Bearer token)",
     "_postman_id": "safegate-collection-v1",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
@@ -34,6 +34,11 @@
                   "    pm.expect(body.status).to.eql('healthy');",
                   "    pm.expect(body.service).to.eql('safegate');",
                   "    pm.expect(body.time).to.be.a('string');",
+                  "});",
+                  "pm.test('Security headers present', () => {",
+                  "    pm.expect(pm.response.headers.get('X-Content-Type-Options')).to.eql('nosniff');",
+                  "    pm.expect(pm.response.headers.get('X-Frame-Options')).to.eql('DENY');",
+                  "    pm.expect(pm.response.headers.get('X-Request-ID')).to.be.a('string').with.lengthOf(32);",
                   "});"
                 ],
                 "type": "text/javascript"
@@ -42,12 +47,7 @@
           ],
           "request": {
             "method": "GET",
-            "header": [
-              {
-                "key": "X-API-Key",
-                "value": "{{apiKey}}"
-              }
-            ],
+            "header": [],
             "url": {
               "raw": "{{baseUrl}}/health",
               "host": ["{{baseUrl}}"],
@@ -56,15 +56,16 @@
           }
         },
         {
-          "name": "Health check – 401 missing API key",
+          "name": "Health check – 200 without API key (public endpoint)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "exec": [
-                  "pm.test('Status 401 when API key configured but missing', () => {",
-                  "    // This will be 200 if SAFEGATE_API_KEY is empty (auth disabled)",
-                  "    pm.expect([200, 401]).to.include(pm.response.code);",
+                  "pm.test('Status 200 – /health bypasses auth', () => pm.response.to.have.status(200));",
+                  "pm.test('Body has status healthy', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.status).to.eql('healthy');",
                   "});"
                 ],
                 "type": "text/javascript"
@@ -671,10 +672,20 @@
               "script": {
                 "exec": [
                   "pm.test('Status 204', () => pm.response.to.have.status(204));",
-                  "pm.test('CORS headers present', () => {",
-                  "    pm.expect(pm.response.headers.get('Access-Control-Allow-Origin')).to.eql('*');",
-                  "    pm.expect(pm.response.headers.get('Access-Control-Allow-Methods')).to.include('POST');",
-                  "    pm.expect(pm.response.headers.get('Access-Control-Allow-Headers')).to.include('X-API-Key');",
+                  "pm.test('CORS headers present when origin is allowed', () => {",
+                  "    // CORS headers are only returned if SAFEGATE_CORS_ORIGINS includes the Origin",
+                  "    const allowOrigin = pm.response.headers.get('Access-Control-Allow-Origin');",
+                  "    if (allowOrigin) {",
+                  "        pm.expect(allowOrigin).to.eql('https://example.com');",
+                  "        pm.expect(pm.response.headers.get('Access-Control-Allow-Methods')).to.include('POST');",
+                  "        pm.expect(pm.response.headers.get('Access-Control-Allow-Headers')).to.include('X-API-Key');",
+                  "        pm.expect(pm.response.headers.get('Access-Control-Max-Age')).to.eql('86400');",
+                  "        pm.expect(pm.response.headers.get('Vary')).to.include('Origin');",
+                  "    }",
+                  "});",
+                  "pm.test('Security headers present', () => {",
+                  "    pm.expect(pm.response.headers.get('X-Content-Type-Options')).to.eql('nosniff');",
+                  "    pm.expect(pm.response.headers.get('X-Request-ID')).to.be.a('string');",
                   "});"
                 ],
                 "type": "text/javascript"
@@ -712,8 +723,11 @@
               "script": {
                 "exec": [
                   "pm.test('Status 204', () => pm.response.to.have.status(204));",
-                  "pm.test('CORS headers present', () => {",
-                  "    pm.expect(pm.response.headers.get('Access-Control-Allow-Origin')).to.eql('*');",
+                  "pm.test('CORS headers depend on SAFEGATE_CORS_ORIGINS config', () => {",
+                  "    const allowOrigin = pm.response.headers.get('Access-Control-Allow-Origin');",
+                  "    if (allowOrigin) {",
+                  "        pm.expect(allowOrigin).to.eql('https://example.com');",
+                  "    }",
                   "});"
                 ],
                 "type": "text/javascript"
@@ -732,6 +746,163 @@
                 "value": "GET"
               }
             ],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "CORS blocked for unlisted origin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 204', () => pm.response.to.have.status(204));",
+                  "pm.test('No Access-Control-Allow-Origin for unlisted origin', () => {",
+                  "    // Unless SAFEGATE_CORS_ORIGINS includes * or evil.com, no CORS header",
+                  "    const allowOrigin = pm.response.headers.get('Access-Control-Allow-Origin');",
+                  "    pm.expect(allowOrigin).to.be.oneOf([undefined, null]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "OPTIONS",
+            "header": [
+              {
+                "key": "Origin",
+                "value": "https://evil.com"
+              },
+              {
+                "key": "Access-Control-Request-Method",
+                "value": "POST"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Security",
+      "item": [
+        {
+          "name": "Security headers on every response",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('X-Content-Type-Options is nosniff', () => {",
+                  "    pm.expect(pm.response.headers.get('X-Content-Type-Options')).to.eql('nosniff');",
+                  "});",
+                  "pm.test('X-Frame-Options is DENY', () => {",
+                  "    pm.expect(pm.response.headers.get('X-Frame-Options')).to.eql('DENY');",
+                  "});",
+                  "pm.test('Strict-Transport-Security present', () => {",
+                  "    pm.expect(pm.response.headers.get('Strict-Transport-Security')).to.include('max-age=');",
+                  "});",
+                  "pm.test('Content-Security-Policy present', () => {",
+                  "    pm.expect(pm.response.headers.get('Content-Security-Policy')).to.include(\"default-src 'none'\");",
+                  "});",
+                  "pm.test('Referrer-Policy is no-referrer', () => {",
+                  "    pm.expect(pm.response.headers.get('Referrer-Policy')).to.eql('no-referrer');",
+                  "});",
+                  "pm.test('Permissions-Policy present', () => {",
+                  "    pm.expect(pm.response.headers.get('Permissions-Policy')).to.include('camera=()');",
+                  "});",
+                  "pm.test('Cache-Control is no-store', () => {",
+                  "    pm.expect(pm.response.headers.get('Cache-Control')).to.eql('no-store');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "X-Request-ID on every response",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('X-Request-ID header present', () => {",
+                  "    const reqId = pm.response.headers.get('X-Request-ID');",
+                  "    pm.expect(reqId).to.be.a('string');",
+                  "    pm.expect(reqId).to.have.lengthOf(32);",
+                  "});",
+                  "pm.test('X-Request-ID is unique per request', () => {",
+                  "    const reqId = pm.response.headers.get('X-Request-ID');",
+                  "    const prev = pm.environment.get('prevRequestId');",
+                  "    if (prev) {",
+                  "        pm.expect(reqId).to.not.eql(prev);",
+                  "    }",
+                  "    pm.environment.set('prevRequestId', reqId);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "Rate limiting – 429 after burst",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// This test verifies the rate limiter returns 429 when the limit is exceeded.",
+                  "// To trigger this, set SAFEGATE_RATE_LIMIT_RPM=2 and run this request 3+ times quickly.",
+                  "pm.test('Rate limiter responds with 429 or 200', () => {",
+                  "    pm.expect([200, 429]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 429) {",
+                  "    pm.test('429 includes Retry-After header', () => {",
+                  "        pm.expect(pm.response.headers.get('Retry-After')).to.eql('60');",
+                  "    });",
+                  "    pm.test('429 body format', () => {",
+                  "        const body = pm.response.json();",
+                  "        pm.expect(body.success).to.be.false;",
+                  "        pm.expect(body.message).to.include('Rate limit');",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
             "url": {
               "raw": "{{baseUrl}}/health",
               "host": ["{{baseUrl}}"],

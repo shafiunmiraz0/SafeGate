@@ -8,6 +8,7 @@
   <a href="#architecture">Architecture</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#api-reference">API</a> •
+  <a href="#security">Security</a> •
   <a href="#configuration">Configuration</a> •
   <a href="#laravel-integration">Laravel Integration</a> •
   <a href="#license">License</a>
@@ -30,8 +31,12 @@ SafeGate is a dedicated file security scanning microservice that inspects upload
 - **Zip Bomb Protection** — Analyzes compression ratios, nesting depth, decompressed size limits, and detects path traversal in archives
 - **Metadata Validation** — Checks file size limits, empty files, null byte injection in text files, filename length, and double-extension spoofing (e.g. `report.pdf.exe`)
 - **API Key Authentication** — Optional `X-API-Key` or `Bearer` token authentication with constant-time comparison
-- **CORS Support** — Built-in Cross-Origin Resource Sharing headers
-- **Health Check Endpoint** — For load balancer and orchestrator readiness probes
+- **Security Headers** — X-Content-Type-Options, X-Frame-Options, HSTS, CSP, Referrer-Policy, Permissions-Policy
+- **Rate Limiting** — Per-IP token bucket rate limiter with configurable requests/minute
+- **CORS Hardening** — Configurable allowed origins (no wildcard by default)
+- **Request Timeouts** — Server read/write/idle timeouts + per-request context deadline to prevent slow loris attacks
+- **Request Tracing** — Unique `X-Request-ID` header on every response for audit trails and debugging
+- **Health Check Endpoint** — Public `/health` endpoint (bypasses auth) for load balancer readiness probes
 - **Zero Dependencies Runtime** — Single static binary, runs on Alpine Linux
 
 ## Architecture
@@ -184,6 +189,16 @@ X-API-Key: your-api-key
 }
 ```
 
+**Rate Limit Exceeded** (`429 Too Many Requests`):
+```json
+{
+  "success": false,
+  "message": "Rate limit exceeded. Try again later."
+}
+```
+
+> **Note:** All responses include `X-Request-ID` and security headers. See the [Security](#security) section for details.
+
 ### cURL Examples
 
 ```bash
@@ -198,6 +213,69 @@ curl -X POST http://localhost:8443/api/v1/scan \
   -F "file=@photo.jpg"
 ```
 
+## Security
+
+SafeGate follows security best practices for API services. All security features are configurable via environment variables.
+
+### Security Headers
+
+Every response includes the following headers:
+
+| Header | Value | Purpose |
+|--------|-------|---------|
+| `X-Content-Type-Options` | `nosniff` | Prevents MIME type sniffing |
+| `X-Frame-Options` | `DENY` | Prevents clickjacking via iframes |
+| `X-XSS-Protection` | `0` | Defers to CSP (modern best practice) |
+| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains; preload` | Enforces HTTPS for 2 years |
+| `Content-Security-Policy` | `default-src 'none'; frame-ancestors 'none'` | Blocks all content loading |
+| `Referrer-Policy` | `no-referrer` | Prevents referrer leakage |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` | Disables browser features |
+| `Cache-Control` | `no-store` | Prevents caching of scan results |
+
+### Request Tracing
+
+Every response includes an `X-Request-ID` header containing a cryptographically random 32-character hex string. This ID is also logged with the request for correlation and audit trails.
+
+### Rate Limiting
+
+Per-IP token bucket rate limiting is enabled by default at **60 requests/minute**. When exceeded, the API returns `429 Too Many Requests` with a `Retry-After: 60` header. Configure via `SAFEGATE_RATE_LIMIT_RPM` (set to `0` to disable).
+
+### CORS
+
+CORS is **restrictive by default** — no cross-origin requests are allowed unless you explicitly set `SAFEGATE_CORS_ORIGINS`. Set specific origins for production:
+
+```bash
+SAFEGATE_CORS_ORIGINS=https://app.example.com,https://admin.example.com
+```
+
+### Server Timeouts
+
+To prevent slow loris and resource exhaustion attacks:
+
+| Timeout | Default | Purpose |
+|---------|---------|---------|
+| Read | 30s | Max time to read the full request |
+| Write | 60s | Max time to write the full response |
+| Idle | 120s | Max time for keep-alive connections |
+| Request | 300s | Per-request context deadline (for large file scans) |
+
+### API Key Best Practices
+
+- Use a cryptographically random key of **at least 32 characters**
+- SafeGate warns on startup if the key is missing or too short
+- Authentication uses **constant-time comparison** to prevent timing attacks
+- The `/health` endpoint is public and does **not** require authentication
+
+### Trusted Proxies
+
+If SafeGate sits behind a reverse proxy (nginx, Cloudflare, AWS ALB), configure trusted proxy IPs so rate limiting uses the real client IP:
+
+```bash
+SAFEGATE_TRUSTED_PROXIES=10.0.0.1,172.16.0.1
+```
+
+Only `X-Forwarded-For` and `X-Real-IP` headers from trusted proxy IPs are respected.
+
 ## Configuration
 
 All configuration is done via environment variables. Copy `.env.example` to `.env` to get started.
@@ -205,7 +283,7 @@ All configuration is done via environment variables. Copy `.env.example` to `.en
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SAFEGATE_PORT` | `8443` | HTTP server port |
-| `SAFEGATE_API_KEY` | *(empty)* | API key for authentication. Leave empty to disable auth. |
+| `SAFEGATE_API_KEY` | *(empty)* | API key for authentication (min 32 chars recommended). Leave empty to disable auth. |
 | `SAFEGATE_MAX_FILE_SIZE` | `52428800` (50 MB) | Maximum upload file size in bytes |
 | `SAFEGATE_CLAMAV_ADDR` | `clamav:3310` | ClamAV daemon TCP address |
 | `SAFEGATE_CLAMAV_ENABLED` | `true` | Enable/disable ClamAV antivirus scanning |
@@ -213,6 +291,13 @@ All configuration is done via environment variables. Copy `.env.example` to `.en
 | `SAFEGATE_MAX_ARCHIVE_SIZE` | `209715200` (200 MB) | Maximum decompressed archive size in bytes |
 | `SAFEGATE_ALLOWED_TYPES` | *(see below)* | Comma-separated list of allowed MIME types |
 | `SAFEGATE_TEMP_DIR` | OS temp dir | Temporary directory for file processing |
+| `SAFEGATE_CORS_ORIGINS` | *(empty)* | Comma-separated allowed CORS origins (empty = block cross-origin) |
+| `SAFEGATE_RATE_LIMIT_RPM` | `60` | Max requests per minute per IP (0 = disabled) |
+| `SAFEGATE_READ_TIMEOUT` | `30` | HTTP server read timeout in seconds |
+| `SAFEGATE_WRITE_TIMEOUT` | `60` | HTTP server write timeout in seconds |
+| `SAFEGATE_IDLE_TIMEOUT` | `120` | HTTP server idle timeout in seconds |
+| `SAFEGATE_REQUEST_TIMEOUT` | `300` | Per-request context timeout in seconds |
+| `SAFEGATE_TRUSTED_PROXIES` | *(empty)* | Comma-separated trusted proxy IPs for X-Forwarded-For |
 
 ### Default Allowed MIME Types
 
@@ -336,7 +421,7 @@ safegate/
 │   ├── handler/
 │   │   └── handler.go           # HTTP handlers (scan + health)
 │   ├── middleware/
-│   │   └── middleware.go         # API key auth, CORS, request logging
+│   │   └── middleware.go         # Auth, security headers, rate limiting, CORS, request ID, logging
 │   └── scanner/
 │       ├── scanner.go           # Scanner interface, orchestrator, types
 │       ├── metadata.go          # File metadata validation
