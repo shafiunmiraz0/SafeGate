@@ -12,20 +12,20 @@ services:
       - SAFEGATE_MAX_FILE_SIZE=52428800
     depends_on:
       clamav:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     networks:
       - safegate-net
 
   clamav:
     image: clamav/clamav:stable
-    container_name: clamav
+    container_name: safegate-clamav
     ports:
       - "3310:3310"
     volumes:
       - clamav-data:/var/lib/clamav
     healthcheck:
-      test: ["CMD", "clamdcheck"]
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/127.0.0.1/3310' || exit 1"]
       interval: 30s
       timeout: 10s
       start_period: 120s
