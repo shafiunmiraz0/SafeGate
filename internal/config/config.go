@@ -49,12 +49,12 @@ func Load() *Config {
 		MaxArchiveSize:  getEnvInt64("SAFEGATE_MAX_ARCHIVE_SIZE", 200*1024*1024), // 200MB
 
 		CORSAllowedOrigins: getEnvSlice("SAFEGATE_CORS_ORIGINS", nil),
-		RateLimitRPM:        getEnvInt("SAFEGATE_RATE_LIMIT_RPM", 60),
-		ReadTimeout:         getEnvInt("SAFEGATE_READ_TIMEOUT", 30),
-		WriteTimeout:        getEnvInt("SAFEGATE_WRITE_TIMEOUT", 60),
-		IdleTimeout:         getEnvInt("SAFEGATE_IDLE_TIMEOUT", 120),
-		RequestTimeout:      getEnvInt("SAFEGATE_REQUEST_TIMEOUT", 300),
-		TrustedProxies:      getEnvSlice("SAFEGATE_TRUSTED_PROXIES", nil),
+		RateLimitRPM:       getEnvInt("SAFEGATE_RATE_LIMIT_RPM", 60),
+		ReadTimeout:        getEnvInt("SAFEGATE_READ_TIMEOUT", 30),
+		WriteTimeout:       getEnvInt("SAFEGATE_WRITE_TIMEOUT", 60),
+		IdleTimeout:        getEnvInt("SAFEGATE_IDLE_TIMEOUT", 120),
+		RequestTimeout:     getEnvInt("SAFEGATE_REQUEST_TIMEOUT", 300),
+		TrustedProxies:     getEnvSlice("SAFEGATE_TRUSTED_PROXIES", nil),
 
 		EtcdEndpoints:   getEnvSlice("SAFEGATE_ETCD_ENDPOINTS", []string{"etcd:2379"}),
 		EtcdEnabled:     getEnvBool("SAFEGATE_ETCD_ENABLED", false),
