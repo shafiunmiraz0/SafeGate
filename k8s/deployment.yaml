@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safegate
+  namespace: safegate
+  labels:
+    app: safegate
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: safegate
+  template:
+    metadata:
+      labels:
+        app: safegate
+    spec:
+      containers:
+        - name: safegate
+          image: safegate:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8443
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: safegate-config
+            - secretRef:
+                name: safegate-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8443
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8443
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      restartPolicy: Always

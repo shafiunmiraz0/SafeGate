@@ -26,6 +26,13 @@ type Config struct {
 	IdleTimeout        int      // HTTP server idle timeout in seconds
 	RequestTimeout     int      // per-request context timeout in seconds
 	TrustedProxies     []string // trusted proxy IPs for X-Forwarded-For
+
+	// Etcd settings
+	EtcdEndpoints   []string // etcd endpoints (e.g., ["etcd:2379"])
+	EtcdEnabled     bool     // enable etcd for distributed caching/rate limiting
+	EtcdDialTimeout int      // etcd dial timeout in seconds
+	EtcdPrefix      string   // key prefix for etcd entries
+	CacheTTL        int      // scan result cache TTL in seconds
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -48,6 +55,12 @@ func Load() *Config {
 		IdleTimeout:         getEnvInt("SAFEGATE_IDLE_TIMEOUT", 120),
 		RequestTimeout:      getEnvInt("SAFEGATE_REQUEST_TIMEOUT", 300),
 		TrustedProxies:      getEnvSlice("SAFEGATE_TRUSTED_PROXIES", nil),
+
+		EtcdEndpoints:   getEnvSlice("SAFEGATE_ETCD_ENDPOINTS", []string{"etcd:2379"}),
+		EtcdEnabled:     getEnvBool("SAFEGATE_ETCD_ENABLED", false),
+		EtcdDialTimeout: getEnvInt("SAFEGATE_ETCD_DIAL_TIMEOUT", 5),
+		EtcdPrefix:      getEnv("SAFEGATE_ETCD_PREFIX", "/safegate/"),
+		CacheTTL:        getEnvInt("SAFEGATE_CACHE_TTL", 3600),
 	}
 }
 

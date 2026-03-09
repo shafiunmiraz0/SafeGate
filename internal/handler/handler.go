@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/YourName/safegate/internal/cache"
 	"github.com/YourName/safegate/internal/scanner"
 )
 
@@ -18,10 +20,12 @@ import (
 type ScanHandler struct {
 	orchestrator *scanner.Orchestrator
 	maxFileSize  int64
+	cache        *cache.Cache
+	cacheTTL     time.Duration
 }
 
-func NewScanHandler(orch *scanner.Orchestrator, maxFileSize int64) *ScanHandler {
-	return &ScanHandler{orchestrator: orch, maxFileSize: maxFileSize}
+func NewScanHandler(orch *scanner.Orchestrator, maxFileSize int64, c *cache.Cache, cacheTTL time.Duration) *ScanHandler {
+	return &ScanHandler{orchestrator: orch, maxFileSize: maxFileSize, cache: c, cacheTTL: cacheTTL}
 }
 
 // ScanResponse is the JSON response for a scan request.
@@ -84,8 +88,46 @@ func (h *ScanHandler) HandleScan(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Scanning file: %s (%d bytes, type: %s)", fileInfo.Filename, fileInfo.Size, fileInfo.MIMEType)
 
+	// Check cache for previous scan result
+	if h.cache != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		cached, err := h.cache.GetScanResult(ctx, fileInfo.SHA256)
+		cancel()
+		if err != nil {
+			log.Printf("Cache lookup error (proceeding with scan): %v", err)
+		} else if cached != nil {
+			var cachedResult scanner.ScanResult
+			if err := json.Unmarshal(cached, &cachedResult); err == nil {
+				log.Printf("Cache hit for %s (sha256: %s)", fileInfo.Filename, fileInfo.SHA256)
+				status := http.StatusOK
+				msg := "File scan complete — file is safe (cached)"
+				if !cachedResult.Safe {
+					status = http.StatusUnprocessableEntity
+					msg = "File scan complete — threats detected (cached)"
+				}
+				writeJSON(w, status, ScanResponse{
+					Success: cachedResult.Safe,
+					Message: msg,
+					Data:    &cachedResult,
+				})
+				return
+			}
+		}
+	}
+
 	// Run all scanners
 	result := h.orchestrator.Scan(fileInfo)
+
+	// Cache the result
+	if h.cache != nil {
+		if data, err := json.Marshal(result); err == nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			if err := h.cache.SetScanResult(ctx, fileInfo.SHA256, data, h.cacheTTL); err != nil {
+				log.Printf("Cache store error: %v", err)
+			}
+			cancel()
+		}
+	}
 
 	status := http.StatusOK
 	msg := "File scan complete — file is safe"

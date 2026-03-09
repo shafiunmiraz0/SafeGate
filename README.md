@@ -10,6 +10,7 @@
   <a href="#api-reference">API</a> •
   <a href="#security">Security</a> •
   <a href="#configuration">Configuration</a> •
+  <a href="#horizontal-scaling">Scaling</a> •
   <a href="#laravel-integration">Laravel Integration</a> •
   <a href="#license">License</a>
 </p>
@@ -32,11 +33,14 @@ SafeGate is a dedicated file security scanning microservice that inspects upload
 - **Metadata Validation** — Checks file size limits, empty files, null byte injection in text files, filename length, and double-extension spoofing (e.g. `report.pdf.exe`)
 - **API Key Authentication** — Optional `X-API-Key` or `Bearer` token authentication with constant-time comparison
 - **Security Headers** — X-Content-Type-Options, X-Frame-Options, HSTS, CSP, Referrer-Policy, Permissions-Policy
-- **Rate Limiting** — Per-IP token bucket rate limiter with configurable requests/minute
+- **Rate Limiting** — Per-IP token bucket rate limiter with configurable requests/minute (in-memory or distributed via etcd)
 - **CORS Hardening** — Configurable allowed origins (no wildcard by default)
 - **Request Timeouts** — Server read/write/idle timeouts + per-request context deadline to prevent slow loris attacks
 - **Request Tracing** — Unique `X-Request-ID` header on every response for audit trails and debugging
 - **Health Check Endpoint** — Public `/health` endpoint (bypasses auth) for load balancer readiness probes
+- **Scan Result Caching** — Identical files (by SHA256) are cached in etcd to avoid redundant scans across pods
+- **Horizontal Scaling** — Stateless design with etcd-backed distributed state for multi-pod Kubernetes deployments
+- **Kubernetes Ready** — Includes Deployment, HPA, StatefulSet (etcd), ConfigMap, and Service manifests
 - **Zero Dependencies Runtime** — Single static binary, runs on Alpine Linux
 
 ## Architecture
@@ -44,7 +48,7 @@ SafeGate is a dedicated file security scanning microservice that inspects upload
 ```
 ┌──────────────┐       POST /api/v1/scan       ┌────────────────────────┐
 │  Your App    │  ──────────────────────────▶   │       SafeGate         │
-│  (Laravel,   │                                │                        │
+│  (Laravel,   │                                │       (Pod 1..N)       │
 │   Django,    │       JSON response            │  ┌──────────────────┐  │
 │   Express)   │  ◀──────────────────────────   │  │ Scanner Pipeline │  │
 └──────────────┘                                │  │                  │  │
@@ -54,6 +58,12 @@ SafeGate is a dedicated file security scanning microservice that inspects upload
                                                 │  │ 4. Macro/Script  │  │     │  ClamAV  │
                                                 │  │ 5. Archive Bomb  │  │     │  Daemon  │
                                                 │  │ 6. ClamAV ───────│──│────▶│ (TCP)    │
+                                                │  └──────────────────┘  │     └──────────┘
+                                                │                        │
+                                                │  ┌──────────────────┐  │     ┌──────────┐
+                                                │  │ Distributed      │  │     │  etcd    │
+                                                │  │ • Rate Limiting  │──│────▶│ Cluster  │
+                                                │  │ • Scan Caching   │  │     │ (3-node) │
                                                 │  └──────────────────┘  │     └──────────┘
                                                 └────────────────────────┘
 ```
@@ -73,7 +83,7 @@ cd safegate
 cp .env.example .env
 # Edit .env to set your SAFEGATE_API_KEY
 
-# Start SafeGate + ClamAV
+# Start SafeGate + ClamAV + etcd
 docker compose up -d
 
 # Test the health endpoint
@@ -85,7 +95,7 @@ curl http://localhost:8443/health
 ### Using Go Directly
 
 ```bash
-# Prerequisites: Go 1.22+
+# Prerequisites: Go 1.24+
 
 # Clone and build
 git clone https://github.com/YourName/safegate.git
@@ -240,6 +250,8 @@ Every response includes an `X-Request-ID` header containing a cryptographically 
 
 Per-IP token bucket rate limiting is enabled by default at **60 requests/minute**. When exceeded, the API returns `429 Too Many Requests` with a `Retry-After: 60` header. Configure via `SAFEGATE_RATE_LIMIT_RPM` (set to `0` to disable).
 
+When etcd is enabled (`SAFEGATE_ETCD_ENABLED=true`), rate limiting is distributed across all pods — limits apply globally, not per-instance.
+
 ### CORS
 
 CORS is **restrictive by default** — no cross-origin requests are allowed unless you explicitly set `SAFEGATE_CORS_ORIGINS`. Set specific origins for production:
@@ -298,6 +310,11 @@ All configuration is done via environment variables. Copy `.env.example` to `.en
 | `SAFEGATE_IDLE_TIMEOUT` | `120` | HTTP server idle timeout in seconds |
 | `SAFEGATE_REQUEST_TIMEOUT` | `300` | Per-request context timeout in seconds |
 | `SAFEGATE_TRUSTED_PROXIES` | *(empty)* | Comma-separated trusted proxy IPs for X-Forwarded-For |
+| `SAFEGATE_ETCD_ENABLED` | `false` | Enable etcd for distributed caching and rate limiting |
+| `SAFEGATE_ETCD_ENDPOINTS` | `etcd:2379` | Comma-separated etcd endpoints |
+| `SAFEGATE_ETCD_DIAL_TIMEOUT` | `5` | Etcd connection timeout in seconds |
+| `SAFEGATE_ETCD_PREFIX` | `/safegate/` | Key prefix for all etcd entries |
+| `SAFEGATE_CACHE_TTL` | `3600` (1 hour) | Scan result cache TTL in seconds (requires etcd) |
 
 ### Default Allowed MIME Types
 
@@ -408,6 +425,51 @@ public function upload(Request $request, SafeGateService $scanner)
 }
 ```
 
+## Horizontal Scaling
+
+SafeGate supports horizontal scaling across multiple pods/instances using **etcd** as a shared backend for:
+
+- **Distributed Rate Limiting** — Token bucket state is shared across all pods via etcd transactions, so rate limits apply globally rather than per-pod.
+- **Scan Result Caching** — Identical files (matched by SHA256) are only scanned once. Subsequent uploads hit the etcd cache, reducing latency and ClamAV load.
+- **Graceful Fallback** — If etcd is unavailable, SafeGate falls back to in-memory rate limiting and skips caching (fail-open).
+
+### Docker Compose (with etcd)
+
+```bash
+# Start SafeGate + ClamAV + etcd
+docker compose up -d
+
+# Scale SafeGate to 3 instances
+docker compose up -d --scale safegate=3
+```
+
+> **Note:** When scaling with docker-compose, remove the `container_name: safegate` line from `docker-compose.yml` to allow multiple containers.
+
+### Kubernetes Deployment
+
+```bash
+# Apply all manifests
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/secret.yaml
+kubectl apply -f k8s/configmap.yaml
+kubectl apply -f k8s/etcd.yaml
+kubectl apply -f k8s/clamav.yaml
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
+kubectl apply -f k8s/hpa.yaml
+
+# Check status
+kubectl -n safegate get pods
+kubectl -n safegate get hpa
+```
+
+The K8s setup includes:
+- **3-node etcd StatefulSet** with persistent storage for high availability
+- **SafeGate Deployment** with 2 replicas (scalable to 10 via HPA)
+- **HPA** that auto-scales based on CPU (70%) and memory (80%) utilization
+- **Readiness/Liveness probes** on the `/health` endpoint
+- **ConfigMap + Secret** for configuration management
+
 ## Project Structure
 
 ```
@@ -416,12 +478,15 @@ safegate/
 │   └── safegate/
 │       └── main.go              # Application entry point, wiring
 ├── internal/
+│   ├── cache/
+│   │   └── etcd.go              # Etcd client wrapper (caching + distributed rate limiting)
 │   ├── config/
 │   │   └── config.go            # Environment-based configuration
 │   ├── handler/
 │   │   └── handler.go           # HTTP handlers (scan + health)
 │   ├── middleware/
-│   │   └── middleware.go         # Auth, security headers, rate limiting, CORS, request ID, logging
+│   │   ├── middleware.go         # Auth, security headers, rate limiting, CORS, request ID, logging
+│   │   └── ratelimit_etcd.go    # Etcd-backed distributed rate limiter
 │   └── scanner/
 │       ├── scanner.go           # Scanner interface, orchestrator, types
 │       ├── metadata.go          # File metadata validation
@@ -430,9 +495,18 @@ safegate/
 │       ├── macro.go             # Office macro and PDF script detection
 │       ├── archive.go           # Zip bomb and archive analysis
 │       └── clamav.go            # ClamAV TCP integration
+├── k8s/
+│   ├── namespace.yaml           # Kubernetes namespace
+│   ├── configmap.yaml           # Application configuration
+│   ├── secret.yaml              # API key secret
+│   ├── deployment.yaml          # SafeGate deployment (2-10 replicas)
+│   ├── service.yaml             # ClusterIP service
+│   ├── hpa.yaml                 # Horizontal Pod Autoscaler
+│   ├── etcd.yaml                # Etcd StatefulSet (3-node cluster)
+│   └── clamav.yaml              # ClamAV deployment
 ├── .env.example                 # Example environment configuration
 ├── Dockerfile                   # Multi-stage build (Go → Alpine)
-├── docker-compose.yml           # SafeGate + ClamAV stack
+├── docker-compose.yml           # SafeGate + ClamAV + etcd stack
 ├── go.mod
 ├── go.sum
 └── LICENSE                      # Apache 2.0

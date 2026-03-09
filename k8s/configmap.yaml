@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: safegate-config
+  namespace: safegate
+data:
+  SAFEGATE_PORT: "8443"
+  SAFEGATE_CLAMAV_ADDR: "clamav:3310"
+  SAFEGATE_CLAMAV_ENABLED: "true"
+  SAFEGATE_MAX_FILE_SIZE: "52428800"
+  SAFEGATE_ETCD_ENABLED: "true"
+  SAFEGATE_ETCD_ENDPOINTS: "etcd-0.etcd-headless.safegate.svc.cluster.local:2379,etcd-1.etcd-headless.safegate.svc.cluster.local:2379,etcd-2.etcd-headless.safegate.svc.cluster.local:2379"
+  SAFEGATE_ETCD_PREFIX: "/safegate/"
+  SAFEGATE_CACHE_TTL: "3600"
+  SAFEGATE_RATE_LIMIT_RPM: "60"
+  SAFEGATE_READ_TIMEOUT: "30"
+  SAFEGATE_WRITE_TIMEOUT: "60"
+  SAFEGATE_IDLE_TIMEOUT: "120"
+  SAFEGATE_REQUEST_TIMEOUT: "300"

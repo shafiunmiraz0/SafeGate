@@ -8,6 +8,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/YourName/safegate/internal/cache"
 	"github.com/YourName/safegate/internal/config"
 	"github.com/YourName/safegate/internal/handler"
 	"github.com/YourName/safegate/internal/middleware"
@@ -44,7 +45,27 @@ func main() {
 	}
 
 	orchestrator := scanner.NewOrchestrator(scanners...)
-	scanHandler := handler.NewScanHandler(orchestrator, cfg.MaxFileSize)
+
+	// Initialize etcd cache (optional)
+	var etcdCache *cache.Cache
+	if cfg.EtcdEnabled {
+		var err error
+		etcdCache, err = cache.New(
+			cfg.EtcdEndpoints,
+			cfg.EtcdPrefix,
+			time.Duration(cfg.EtcdDialTimeout)*time.Second,
+		)
+		if err != nil {
+			log.Printf("WARNING: Failed to connect to etcd: %v — running without distributed cache", err)
+		} else {
+			log.Printf("Etcd enabled at %v (prefix: %s, cache TTL: %ds)", cfg.EtcdEndpoints, cfg.EtcdPrefix, cfg.CacheTTL)
+			defer etcdCache.Close()
+		}
+	} else {
+		log.Println("Etcd disabled — using in-memory rate limiting, no scan caching")
+	}
+
+	scanHandler := handler.NewScanHandler(orchestrator, cfg.MaxFileSize, etcdCache, time.Duration(cfg.CacheTTL)*time.Second)
 
 	// Routes
 	mux := http.NewServeMux()
@@ -62,9 +83,15 @@ func main() {
 
 	// Rate limiting
 	if cfg.RateLimitRPM > 0 {
-		limiter := middleware.NewRateLimiter(cfg.RateLimitRPM, cfg.TrustedProxies)
-		h = limiter.Middleware(h)
-		log.Printf("Rate limiting enabled: %d requests/minute per IP", cfg.RateLimitRPM)
+		if etcdCache != nil {
+			etcdLimiter := middleware.NewEtcdRateLimiter(etcdCache, cfg.RateLimitRPM, cfg.TrustedProxies)
+			h = etcdLimiter.Middleware(h)
+			log.Printf("Distributed rate limiting enabled: %d requests/minute per IP (etcd-backed)", cfg.RateLimitRPM)
+		} else {
+			limiter := middleware.NewRateLimiter(cfg.RateLimitRPM, cfg.TrustedProxies)
+			h = limiter.Middleware(h)
+			log.Printf("In-memory rate limiting enabled: %d requests/minute per IP", cfg.RateLimitRPM)
+		}
 	}
 
 	// CORS

@@ -158,6 +158,12 @@ func CORS(allowedOrigins []string, next http.Handler) http.Handler {
 	})
 }
 
+// RateLimitChecker is the interface for checking rate limits.
+// Both in-memory and etcd-backed implementations satisfy this.
+type RateLimitChecker interface {
+	Allow(ip string) bool
+}
+
 // RateLimiter provides per-IP request rate limiting using a token bucket.
 type RateLimiter struct {
 	mu       sync.Mutex
@@ -238,6 +244,10 @@ func (rl *RateLimiter) allow(ip string) bool {
 		return true
 	}
 	return false
+}
+
+func (rl *RateLimiter) Allow(ip string) bool {
+	return rl.allow(ip)
 }
 
 // Middleware returns an HTTP middleware that enforces the rate limit.

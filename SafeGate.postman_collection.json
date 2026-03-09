@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "SafeGate",
-    "description": "Postman collection for the SafeGate file-scanning API.\n\nSet the `baseUrl` variable (default: http://localhost:8443) and the `apiKey` variable to match your SAFEGATE_API_KEY environment variable.\n\nEndpoints:\n- GET  /health          – public liveness check (no auth required)\n- POST /api/v1/scan     – upload and scan a file\n- OPTIONS /api/v1/scan  – CORS pre-flight\n\nSecurity features tested:\n- Security headers (HSTS, CSP, X-Content-Type-Options, X-Frame-Options, etc.)\n- X-Request-ID tracing on every response\n- Rate limiting (429 Too Many Requests)\n- CORS with configurable allowed origins\n- API key authentication (X-API-Key or Bearer token)",
+    "description": "Postman collection for the SafeGate file-scanning API.\n\nSet the `baseUrl` variable (default: http://localhost:8443) and the `apiKey` variable to match your SAFEGATE_API_KEY environment variable.\n\nEndpoints:\n- GET  /health          – public liveness check (no auth required)\n- POST /api/v1/scan     – upload and scan a file\n- OPTIONS /api/v1/scan  – CORS pre-flight\n\nSecurity features tested:\n- Security headers (HSTS, CSP, X-Content-Type-Options, X-Frame-Options, etc.)\n- X-Request-ID tracing on every response\n- Rate limiting (429 Too Many Requests)\n- CORS with configurable allowed origins\n- API key authentication (X-API-Key or Bearer token)\n\nDistributed features (requires etcd):\n- Scan result caching – identical files return cached results with '(cached)' in the message\n- Distributed rate limiting – shared state across multiple pods",
     "_postman_id": "safegate-collection-v1",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
@@ -379,6 +379,66 @@
                 {
                   "key": "file",
                   "description": "Upload a benign ZIP archive here",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "scan"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Caching (etcd)",
+      "item": [
+        {
+          "name": "Scan same file twice – cache hit on second request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response indicates cached result when etcd enabled', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.success).to.be.true;",
+                  "    // When etcd is enabled and the same file was scanned before,",
+                  "    // the message will include '(cached)'.",
+                  "    // When etcd is disabled, it will be a normal scan result.",
+                  "    pm.expect(body.message).to.include('safe');",
+                  "    pm.expect(body.data.sha256).to.be.a('string').with.lengthOf(64);",
+                  "});",
+                  "",
+                  "// If etcd caching is active, the second scan of the same file should be faster",
+                  "if (pm.response.json().message.includes('cached')) {",
+                  "    pm.test('Cached response has (cached) suffix', () => {",
+                  "        pm.expect(pm.response.json().message).to.include('(cached)');",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "description": "Upload the SAME plain-text .txt file used in 'Scan safe plain-text file' to test cache hit",
                   "type": "file",
                   "src": []
                 }
